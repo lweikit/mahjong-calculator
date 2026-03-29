@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🀄 Mahjong Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .tile { font-size: 1.5rem; }
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .balance-positive { color: #4ade80; }
+    .balance-negative { color: #f87171; }
+    .balance-zero { color: #94a3b8; }
+    .btn-player { transition: all 0.15s; }
+    .btn-player.selected { border-color: #10b981; background: #064e3b; }
+    .fade-in { animation: fadeIn 0.2s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen">
+  <div id="app"></div>
+
+  <script>
+    // ─── State ────────────────────────────────────────────────────────────────
+    const state = {
+      screen: 'setup',   // setup | game | addRound | settle
+      players: [
+        { name: 'East', balance: 0 },
+        { name: 'South', balance: 0 },
+        { name: 'West', balance: 0 },
+        { name: 'North', balance: 0 },
+      ],
+      pointValue: 0.10,  // $ per point
+      rounds: [],
+      // add-round wizard
+      wizard: { step: 1, winner: null, winType: null, discarder: null, points: '' },
+    };
+
+    // ─── Logic ────────────────────────────────────────────────────────────────
+    function commitRound() {
+      const { winner, winType, discarder, points } = state.wizard;
+      const n = parseInt(points, 10);
+      if (!n || n <= 0) return;
+
+      const changes = Array(4).fill(0);
+
+      if (winType === 'zimo') {
+        // each other player pays winner N points
+        changes[winner] += n * 3;
+        for (let i = 0; i < 4; i++) if (i !== winner) changes[i] -= n;
+      } else {
+        // discarder pays winner 3N (shooter pays all)
+        changes[winner] += n * 3;
+        changes[discarder] -= n * 3;
+      }
+
+      changes.forEach((c, i) => { state.players[i].balance += c; });
+
+      state.rounds.push({
+        winner,
+        winType,
+        discarder: winType === 'discard' ? discarder : null,
+        points: n,
+        changes,
+        snap: state.players.map(p => p.balance),
+      });
+
+      state.wizard = { step: 1, winner: null, winType: null, discarder: null, points: '' };
+      state.screen = 'game';
+      render();
+    }
+
+    function undoLastRound() {
+      if (!state.rounds.length) return;
+      const last = state.rounds.pop();
+      last.changes.forEach((c, i) => { state.players[i].balance -= c; });
+      render();
+    }
+
+    function resetGame() {
+      state.players.forEach(p => { p.balance = 0; });
+      state.rounds = [];
+      render();
+    }
+
+    function getSettlement() {
+      const b = state.players.map((p, i) => ({ i, bal: p.balance * state.pointValue }));
+      const txns = [];
+      for (let iter = 0; iter < 20; iter++) {
+        b.sort((a, x) => a.bal - x.bal);
+        if (Math.abs(b[0].bal) < 0.001) break;
+        const poor = b[0], rich = b[b.length - 1];
+        const amt = Math.min(-poor.bal, rich.bal);
+        if (amt < 0.001) break;
+        txns.push({ from: poor.i, to: rich.i, amt });
+        poor.bal += amt;
+        rich.bal -= amt;
+      }
+      return txns;
+    }
+
+    function fmt(points) {
+      const v = points * state.pointValue;
+      const sign = v >= 0 ? '+' : '';
+      return sign + '$' + Math.abs(v).toFixed(2);
+    }
+
+    function fmtAmt(amt) {
+      return '$' + Math.abs(amt).toFixed(2);
+    }
+
+    function balClass(b) {
+      if (b > 0) return 'balance-positive';
+      if (b < 0) return 'balance-negative';
+      return 'balance-zero';
+    }
+
+    // ─── Render ───────────────────────────────────────────────────────────────
+    function render() {
+      const app = document.getElementById('app');
+      switch (state.screen) {
+        case 'setup':    app.innerHTML = renderSetup(); break;
+        case 'game':     app.innerHTML = renderGame(); break;
+        case 'addRound': app.innerHTML = renderAddRound(); break;
+        case 'settle':   app.innerHTML = renderSettle(); break;
+      }
+      bindEvents();
+    }
+
+    // ── Setup Screen ──────────────────────────────────────────────────────────
+    function renderSetup() {
+      return `
+      <div class="min-h-screen flex flex-col items-center justify-center p-6 fade-in">
+        <div class="w-full max-w-sm">
+          <div class="text-center mb-8">
+            <div class="text-5xl mb-3">🀄</div>
+            <h1 class="text-2xl font-bold text-emerald-400">Mahjong Calculator</h1>
+            <p class="text-slate-400 text-sm mt-1">Track balances, settle up instantly</p>
+          </div>
+
+          <div class="bg-slate-900 rounded-2xl p-5 mb-4 border border-slate-800">
+            <p class="text-xs text-slate-500 uppercase tracking-wide mb-3">Player Names</p>
+            ${state.players.map((p, i) => `
+              <div class="flex items-center gap-3 mb-2 last:mb-0">
+                <span class="text-slate-500 text-sm w-5 text-center">${i + 1}</span>
+                <input
+                  id="pname-${i}"
+                  type="text"
+                  value="${p.name}"
+                  maxlength="12"
+                  class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  placeholder="Player ${i + 1}"
+                />
+              </div>
+            `).join('')}
+          </div>
+
+          <div class="bg-slate-900 rounded-2xl p-5 mb-6 border border-slate-800">
+            <p class="text-xs text-slate-500 uppercase tracking-wide mb-3">Point Value</p>
+            <div class="flex items-center gap-2">
+              <span class="text-slate-400 text-sm">$</span>
+              <input
+                id="pointValue"
+                type="number"
+                value="${state.pointValue}"
+                min="0.01"
+                step="0.01"
+                class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+              <span class="text-slate-400 text-sm">per point</span>
+            </div>
+          </div>
+
+          <button id="btn-start"
+            class="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold py-3 rounded-xl transition-colors">
+            Start Game
+          </button>
+        </div>
+      </div>`;
+    }
+
+    // ── Game Screen ───────────────────────────────────────────────────────────
+    function renderGame() {
+      const totalRounds = state.rounds.length;
+      return `
+      <div class="min-h-screen flex flex-col p-4 fade-in max-w-lg mx-auto">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4 pt-2">
+          <div>
+            <h1 class="text-lg font-bold text-emerald-400">🀄 Mahjong</h1>
+            <p class="text-xs text-slate-500">${totalRounds} round${totalRounds !== 1 ? 's' : ''} played</p>
+          </div>
+          <div class="flex gap-2">
+            ${totalRounds > 0 ? `<button id="btn-undo" class="text-xs text-slate-400 hover:text-amber-400 border border-slate-700 hover:border-amber-500 px-3 py-1.5 rounded-lg transition-colors">Undo</button>` : ''}
+            <button id="btn-new" class="text-xs text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500 px-3 py-1.5 rounded-lg transition-colors">New</button>
+          </div>
+        </div>
+
+        <!-- Scoreboard -->
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          ${state.players.map((p, i) => `
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <p class="text-xs text-slate-500 truncate mb-1">${p.name}</p>
+              <p class="text-xl font-bold ${balClass(p.balance)}">${fmt(p.balance)}</p>
+              <p class="text-xs text-slate-600">${p.balance > 0 ? '+' : ''}${p.balance} pts</p>
+            </div>
+          `).join('')}
+        </div>
+
+        <!-- Actions -->
+        <div class="flex gap-3 mb-5">
+          <button id="btn-add-round"
+            class="flex-1 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold py-3 rounded-xl transition-colors">
+            + Add Round
+          </button>
+          <button id="btn-settle"
+            class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-3 rounded-xl transition-colors border border-slate-700">
+            Settle Up
+          </button>
+        </div>
+
+        <!-- Round History -->
+        ${totalRounds > 0 ? `
+          <div>
+            <p class="text-xs text-slate-500 uppercase tracking-wide mb-3">Round History</p>
+            <div class="space-y-2">
+              ${[...state.rounds].reverse().map((r, ri) => {
+                const rNum = totalRounds - ri;
+                const winName = state.players[r.winner].name;
+                const winLabel = r.winType === 'zimo' ? '自摸 Zimo' : `Discard · ${state.players[r.discarder].name} 放炮`;
+                return `
+                <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+                  <div class="flex justify-between items-start">
+                    <div>
+                      <span class="text-xs text-slate-500 mr-2">R${rNum}</span>
+                      <span class="text-sm font-medium text-white">${winName}</span>
+                      <span class="text-xs text-emerald-400 ml-2">+${r.points * 3} pts</span>
+                    </div>
+                    <span class="text-xs text-slate-500">${winLabel}</span>
+                  </div>
+                  <div class="flex gap-3 mt-2 flex-wrap">
+                    ${r.changes.map((c, i) => c !== 0 ? `
+                      <span class="text-xs ${c > 0 ? 'text-emerald-400' : 'text-red-400'}">
+                        ${state.players[i].name} ${c > 0 ? '+' : ''}${c}
+                      </span>
+                    ` : '').join('')}
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>
+        ` : `
+          <div class="flex-1 flex items-center justify-center">
+            <p class="text-slate-600 text-sm">No rounds yet — add the first one!</p>
+          </div>
+        `}
+      </div>`;
+    }
+
+    // ── Add Round Wizard ──────────────────────────────────────────────────────
+    function renderAddRound() {
+      const { step, winner, winType, discarder, points } = state.wizard;
+      return `
+      <div class="min-h-screen flex flex-col p-4 fade-in max-w-lg mx-auto">
+        <div class="flex items-center gap-3 mb-6 pt-2">
+          <button id="btn-back" class="text-slate-400 hover:text-white text-xl leading-none">←</button>
+          <div>
+            <h2 class="text-lg font-semibold">Add Round</h2>
+            <p class="text-xs text-slate-500">Step ${step} of ${winner === null ? 1 : winType === null ? 2 : winType === 'discard' && discarder === null ? 3 : 4}</p>
+          </div>
+        </div>
+
+        ${step === 1 ? `
+          <p class="text-slate-400 text-sm mb-4">Who won this round?</p>
+          <div class="space-y-3">
+            ${state.players.map((p, i) => `
+              <button class="btn-player w-full text-left bg-slate-900 border-2 border-slate-700 rounded-xl px-5 py-4 font-medium hover:border-emerald-600 transition-colors"
+                data-action="pick-winner" data-idx="${i}">
+                ${p.name}
+                <span class="text-xs text-slate-500 ml-2">${fmt(p.balance)}</span>
+              </button>
+            `).join('')}
+          </div>
+        ` : step === 2 ? `
+          <p class="text-slate-400 text-sm mb-1">Winner: <span class="text-white font-medium">${state.players[winner].name}</span></p>
+          <p class="text-slate-400 text-sm mb-4">How did they win?</p>
+          <div class="space-y-3">
+            <button class="btn-player w-full text-left bg-slate-900 border-2 border-slate-700 rounded-xl px-5 py-4 hover:border-emerald-600 transition-colors"
+              data-action="pick-type" data-type="zimo">
+              <p class="font-medium">🤲 Zimo (自摸)</p>
+              <p class="text-xs text-slate-500 mt-0.5">Self-draw — all 3 players each pay</p>
+            </button>
+            <button class="btn-player w-full text-left bg-slate-900 border-2 border-slate-700 rounded-xl px-5 py-4 hover:border-emerald-600 transition-colors"
+              data-action="pick-type" data-type="discard">
+              <p class="font-medium">🎴 Discard (放炮)</p>
+              <p class="text-xs text-slate-500 mt-0.5">Shooter pays all (3×)</p>
+            </button>
+          </div>
+        ` : step === 3 ? `
+          <p class="text-slate-400 text-sm mb-1">Winner: <span class="text-white font-medium">${state.players[winner].name}</span></p>
+          <p class="text-slate-400 text-sm mb-4">Who discarded the winning tile?</p>
+          <div class="space-y-3">
+            ${state.players.map((p, i) => i === winner ? '' : `
+              <button class="btn-player w-full text-left bg-slate-900 border-2 border-slate-700 rounded-xl px-5 py-4 font-medium hover:border-emerald-600 transition-colors"
+                data-action="pick-discarder" data-idx="${i}">
+                ${p.name}
+                <span class="text-xs text-slate-500 ml-2">${fmt(p.balance)}</span>
+              </button>
+            `).join('')}
+          </div>
+        ` : `
+          <!-- Step 4: Points -->
+          <p class="text-slate-400 text-sm mb-4">
+            ${winType === 'zimo'
+              ? `<span class="text-white">${state.players[winner].name}</span> wins (Zimo) — how many points/tai?`
+              : `<span class="text-white">${state.players[winner].name}</span> wins — <span class="text-red-400">${state.players[discarder].name}</span> discarded — how many points/tai?`
+            }
+          </p>
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-4">
+            <input id="points-input" type="number" inputmode="numeric" min="1" max="999"
+              value="${points}"
+              placeholder="e.g. 3"
+              class="w-full bg-transparent text-4xl font-bold text-center text-white focus:outline-none placeholder-slate-700"
+            />
+            <p class="text-center text-slate-500 text-sm mt-1">points / tai</p>
+          </div>
+
+          <!-- Preview -->
+          ${points ? `
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-4">
+              <p class="text-xs text-slate-500 uppercase tracking-wide mb-2">Payment Preview</p>
+              ${(() => {
+                const n = parseInt(points, 10) || 0;
+                const items = [];
+                if (winType === 'zimo') {
+                  state.players.forEach((p, i) => {
+                    if (i !== winner) items.push(`<div class="flex justify-between text-sm"><span class="text-slate-400">${p.name} pays</span><span class="text-red-400">-${n} pts (${fmtAmt(n * state.pointValue)})</span></div>`);
+                  });
+                  items.push(`<div class="flex justify-between text-sm font-medium mt-1 pt-1 border-t border-slate-800"><span class="text-slate-300">${state.players[winner].name} gains</span><span class="text-emerald-400">+${n * 3} pts (${fmtAmt(n * 3 * state.pointValue)})</span></div>`);
+                } else {
+                  items.push(`<div class="flex justify-between text-sm"><span class="text-slate-400">${state.players[discarder].name} pays</span><span class="text-red-400">-${n * 3} pts (${fmtAmt(n * 3 * state.pointValue)})</span></div>`);
+                  items.push(`<div class="flex justify-between text-sm font-medium mt-1 pt-1 border-t border-slate-800"><span class="text-slate-300">${state.players[winner].name} gains</span><span class="text-emerald-400">+${n * 3} pts (${fmtAmt(n * 3 * state.pointValue)})</span></div>`);
+                }
+                return items.join('');
+              })()}
+            </div>
+          ` : ''}
+
+          <button id="btn-confirm-round"
+            class="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors"
+            ${!points || parseInt(points) <= 0 ? 'disabled' : ''}>
+            Confirm Round
+          </button>
+        `}
+      </div>`;
+    }
+
+    // ── Settlement Screen ─────────────────────────────────────────────────────
+    function renderSettle() {
+      const txns = getSettlement();
+      const allZero = txns.length === 0;
+      return `
+      <div class="min-h-screen flex flex-col p-4 fade-in max-w-lg mx-auto">
+        <div class="flex items-center gap-3 mb-6 pt-2">
+          <button id="btn-back" class="text-slate-400 hover:text-white text-xl leading-none">←</button>
+          <h2 class="text-lg font-semibold">Settle Up</h2>
+        </div>
+
+        <!-- Final balances -->
+        <p class="text-xs text-slate-500 uppercase tracking-wide mb-3">Final Balances</p>
+        <div class="grid grid-cols-2 gap-2 mb-6">
+          ${state.players.map(p => `
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <p class="text-xs text-slate-500 truncate">${p.name}</p>
+              <p class="font-bold ${balClass(p.balance)}">${fmt(p.balance)}</p>
+            </div>
+          `).join('')}
+        </div>
+
+        <!-- Transactions -->
+        <p class="text-xs text-slate-500 uppercase tracking-wide mb-3">Transactions</p>
+        ${allZero ? `
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center">
+            <p class="text-2xl mb-2">✅</p>
+            <p class="text-slate-300 font-medium">All square!</p>
+            <p class="text-slate-500 text-sm">No payments needed</p>
+          </div>
+        ` : `
+          <div class="space-y-3">
+            ${txns.map(t => `
+              <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-4 flex items-center justify-between">
+                <div>
+                  <span class="text-red-400 font-medium">${state.players[t.from].name}</span>
+                  <span class="text-slate-500 text-sm mx-2">pays</span>
+                  <span class="text-emerald-400 font-medium">${state.players[t.to].name}</span>
+                </div>
+                <span class="text-white font-bold text-lg">${fmtAmt(t.amt)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `}
+
+        <button id="btn-new-from-settle"
+          class="w-full mt-6 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-3 rounded-xl transition-colors border border-slate-700">
+          New Game
+        </button>
+      </div>`;
+    }
+
+    // ─── Events ───────────────────────────────────────────────────────────────
+    function bindEvents() {
+      // Setup
+      const btnStart = document.getElementById('btn-start');
+      if (btnStart) btnStart.addEventListener('click', () => {
+        state.players.forEach((p, i) => {
+          const el = document.getElementById(`pname-${i}`);
+          if (el && el.value.trim()) p.name = el.value.trim();
+        });
+        const pvEl = document.getElementById('pointValue');
+        if (pvEl && parseFloat(pvEl.value) > 0) state.pointValue = parseFloat(pvEl.value);
+        state.screen = 'game';
+        render();
+      });
+
+      // Game
+      const btnAddRound = document.getElementById('btn-add-round');
+      if (btnAddRound) btnAddRound.addEventListener('click', () => {
+        state.wizard = { step: 1, winner: null, winType: null, discarder: null, points: '' };
+        state.screen = 'addRound';
+        render();
+      });
+      const btnSettle = document.getElementById('btn-settle');
+      if (btnSettle) btnSettle.addEventListener('click', () => { state.screen = 'settle'; render(); });
+      const btnUndo = document.getElementById('btn-undo');
+      if (btnUndo) btnUndo.addEventListener('click', () => { if (confirm('Undo last round?')) undoLastRound(); });
+      const btnNew = document.getElementById('btn-new');
+      if (btnNew) btnNew.addEventListener('click', () => { if (confirm('Reset game? All scores will be cleared.')) { resetGame(); } });
+
+      // Add Round wizard
+      document.querySelectorAll('[data-action="pick-winner"]').forEach(el => {
+        el.addEventListener('click', () => {
+          state.wizard.winner = parseInt(el.dataset.idx, 10);
+          state.wizard.step = 2;
+          render();
+        });
+      });
+      document.querySelectorAll('[data-action="pick-type"]').forEach(el => {
+        el.addEventListener('click', () => {
+          state.wizard.winType = el.dataset.type;
+          state.wizard.step = el.dataset.type === 'zimo' ? 4 : 3;
+          render();
+        });
+      });
+      document.querySelectorAll('[data-action="pick-discarder"]').forEach(el => {
+        el.addEventListener('click', () => {
+          state.wizard.discarder = parseInt(el.dataset.idx, 10);
+          state.wizard.step = 4;
+          render();
+        });
+      });
+
+      const pointsInput = document.getElementById('points-input');
+      if (pointsInput) {
+        pointsInput.addEventListener('input', e => {
+          state.wizard.points = e.target.value;
+          render();
+          // refocus
+          const el = document.getElementById('points-input');
+          if (el) { el.focus(); el.value = state.wizard.points; }
+        });
+        // Auto focus
+        setTimeout(() => { if (pointsInput) pointsInput.focus(); }, 50);
+      }
+
+      const btnConfirm = document.getElementById('btn-confirm-round');
+      if (btnConfirm) btnConfirm.addEventListener('click', commitRound);
+
+      // Back
+      const btnBack = document.getElementById('btn-back');
+      if (btnBack) btnBack.addEventListener('click', () => {
+        if (state.screen === 'addRound') {
+          const w = state.wizard;
+          if (w.step === 4 && w.winType === 'discard') { w.step = 3; w.discarder = null; }
+          else if (w.step === 4 && w.winType === 'zimo') { w.step = 2; w.winType = null; }
+          else if (w.step === 3) { w.step = 2; w.winType = null; }
+          else if (w.step === 2) { w.step = 1; w.winner = null; }
+          else { state.screen = 'game'; }
+        } else {
+          state.screen = 'game';
+        }
+        render();
+      });
+
+      // Settle: new game
+      const btnNewSettle = document.getElementById('btn-new-from-settle');
+      if (btnNewSettle) btnNewSettle.addEventListener('click', () => {
+        if (confirm('Start a new game? All scores will be cleared.')) { resetGame(); state.screen = 'game'; render(); }
+      });
+    }
+
+    // ─── Boot ─────────────────────────────────────────────────────────────────
+    render();
+  </script>
+</body>
+</html>
