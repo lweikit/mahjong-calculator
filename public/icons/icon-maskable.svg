@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Full-bleed background for maskable -->
+  <rect width="512" height="512" fill="#020617"/>
+  <!-- Tile body -->
+  <rect x="80" y="64" width="352" height="384" rx="28" fill="#0f172a" stroke="#1e293b" stroke-width="6"/>
+  <!-- Inner tile border -->
+  <rect x="96" y="80" width="320" height="352" rx="18" fill="none" stroke="#1e293b" stroke-width="3"/>
+  <!-- 中 character -->
+  <text
+    x="256"
+    y="340"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="260"
+    font-weight="bold"
+    fill="#10b981"
+    text-anchor="middle"
+    dominant-baseline="auto"
+  >中</text>
+</svg>
