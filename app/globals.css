@@ -4,6 +4,7 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #020617;
 }
 
 /* Prevent iOS zoom on input focus */
